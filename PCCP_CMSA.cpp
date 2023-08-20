@@ -2,36 +2,37 @@
 #include <chrono>
 #include <ilcplex/ilocplex.h>
 
-
 using namespace std;
-
+#define MAX_SETS 100000 //NOTE: Limita o tamanho das strings em MAX_SETS/(max_age+1) = 50000
+#define MAX_SET_SIZE 1000
+#define MAX_ALPHABET 26
+#define INF -574873548
 
 //========================== data structures ===========================
 
-class Data {
+class Set {
 public:
-    array<int, 10000> columns_set;
-    array<int, 10000> columns_set_ham_distances;
-    array<int, 10000> set_closest_strings;
-    int columns_sets_ham_distances_size;
-    int sets_closest_strings_size;
-    int columns_sets_size;
-    int columns_sets_ages;
+    int size;
+    int age;
+    array<int, MAX_SET_SIZE> columns;
+    array<int, MAX_SETS> hamming_dist; /* NOTE: O tamanho de hamming distance é sempre maior, 
+                                          porque sempre é igual a quantidade de strings de entrada (n) */
+    array<int, MAX_SET_SIZE> closest_string;
 
-    Data() : columns_sets_size(0), columns_sets_ages(0), columns_sets_ham_distances_size(0), sets_closest_strings_size(0)  {}
+    Set() : size(0), age(0) {}
 };
 
 class HashMap {
 public:
-    void insert(int key, const Data& data) {
-        table_[key] = data;
+    void insert(int key, const Set& set) {
+        table_[key] = set;
     }
 
     int size() {
         return table_.size();
     }
 
-    Data* find(int key) {
+    Set* find(int key) {
         auto iter = table_.find(key);
         if (iter != table_.end()) {
             return &(iter->second);
@@ -41,23 +42,11 @@ public:
 
     void remove(int key) {
         table_.erase(key);
-        //cout << "remodivo" << key <<endl;
     }
 
 public:
-    map<int, Data> table_;
+    map<int, Set> table_;
 };
-
-
-vector<int> bests;
-HashMap columns_sets;
-int starting_loop_index = 0;
-int loops_with_no_improval = 0; // controle de loops sem melhora para fugir de otimos locais
-int n_new_sets = 0;
-int visited[100][10000];
-int mapping[10000];
-int columns_ILP_selection[10000];
-
 
 int n, m, t, min_alpha, max_alpha; // numero de cadeias, tamanho de cada cadeia, tamanho do alfabeto
 vector<char> dataset_alphabet;
@@ -66,8 +55,16 @@ vector<vector<int>> integer_dataset;
 map<char, int> alphabetMap;
 vector<vector<int>> char_possibilities_per_column;
 
-unsigned seed;
+HashMap columns_sets;
+int starting_loop_index = 0;
+int loops_with_no_improval = 0; // controle de loops sem melhora para fugir de otimos locais
+int loops = 0;
+int n_new_sets = 0;
+int visited[MAX_ALPHABET][MAX_SETS]; 
+int mapping[MAX_SETS]; 
+int columns_ILP_selection[MAX_SETS];
 
+unsigned seed = 1;
 
 //==================== DEBUG FUNCTIONS ===============//
 
@@ -75,27 +72,72 @@ void print_hash(const HashMap& hash_table) {
     
     for (const auto& pair : hash_table.table_) {
         cout << "Key: " << pair.first << endl;
-        const Data& data = pair.second;
+        const Set& set = pair.second;
         cout << "columns_sets: [ ";
-        for (int i = 0; i < data.columns_sets_size; i++) {
-            cout << data.columns_set[i] << " ";
+        for (int i = 0; i < set.size; i++) {
+            cout << set.columns[i] << " ";
         }
         cout << "]" << endl;
-        cout << "columns_sets_ages: " << data.columns_sets_ages << endl;
+        cout << "age: " << set.age << endl;
         cout << "columns_sets_ham_distances: [ ";
-        for (int i = 0; i < data.columns_sets_ham_distances_size; i++) {
-            cout << data.columns_set_ham_distances[i] << " ";
+        for (int i = 0; i < n; i++) {
+            cout << set.hamming_dist[i] << " ";
         }
         cout << "]" << endl;
         cout << "sets_closest_strings: [ ";
-        for (int i = 0; i < data.sets_closest_strings_size; i++) {
-            cout << data.set_closest_strings[i] << " ";
+        for (int i = 0; i < set.size; i++) {
+            cout << set.closest_string[i] << " ";
         }
         cout << "]" << endl;
         cout << endl;
     }
 }
 
+int* generateClosestString(){
+    int* closest_string = new int[m];
+    int n_sets = columns_sets.size();
+    int key;
+    Set* found;
+
+    for (int i = 0; i < n_sets; i++)
+    {
+        if (columns_ILP_selection[i] == 1)
+        {            
+            key = mapping[i];
+            found = columns_sets.find(key);
+
+            for (int j = 0; j < found->size; j++){
+                closest_string[found->columns[j]] = found->closest_string[j];
+            }
+        }
+    }
+
+/*     for(int i = 0; i < m; i++){
+        cout << closest_string[i] << " ";
+    }
+    cout << endl; */
+
+    return closest_string;
+}
+
+void optionsAndSelected(){
+    int* closest_string = generateClosestString();
+    cout << "Loop " << loops << endl;
+
+    for(int j = 0; j < m; j ++){
+        printf("Caracteres ativos da coluna %d:", j);
+
+        for(int i = 0; i < t; i++){
+            if(visited[i][j] == 1){
+                cout << i << " ";
+            }
+        }
+        cout << endl;
+
+        printf("\tCaractere escolhido pelo CPLEX: %d\n", closest_string[j]);
+    }
+    cout << endl;
+}
 
 //==================== INSTANCE FUNCTIONS ===============//
 
@@ -172,6 +214,16 @@ void readInstance()
 
 }
 
+//inicializa vetor de visitados
+void initializeDataStructures(){
+    for(int i = 0; i < MAX_ALPHABET;i++){
+        for(int j = 0; j < MAX_SETS; j++){
+            visited[i][j] = 0;
+        }
+    }
+
+}
+
 //==================== CMSA CORE FUNCTIONS ===============//
 
 void solveSmallInstances()
@@ -181,53 +233,58 @@ void solveSmallInstances()
     for (int i = starting_loop_index; i < tam + starting_loop_index; i++)
     {
 
-        Data* found_data = columns_sets.find(i);
+        Set* found_data = columns_sets.find(i);
 
-        if (found_data->columns_sets_size == 0){
+        if (found_data->size == 0){
             columns_sets.remove(i);
         }
         else{
 
-            for (int j = 0; j < found_data->columns_sets_size; j++)
+            for (int j = 0; j < found_data->size; j++)
             {
-                int sorted_pos = rand() % (char_possibilities_per_column[found_data->columns_set[j]].size()); 
-                int character = char_possibilities_per_column[found_data->columns_set[j]][sorted_pos];
+                int column = found_data->columns[j];
+                int sorted_pos = rand() % (char_possibilities_per_column[column].size());  //escolhe aleatoriamente um caractere para a posição
+                int character = char_possibilities_per_column[column][sorted_pos];
 
-                while (visited[character][found_data->columns_set[j]] == 1){
+                
+                while (visited[character][column] == 1){ 
+                    /* aqui o loop varre na direção antihorario as linhas de caracteres até encontrar uma posição em que o caractere n esteja sendo utilizado*/
+                    
                     sorted_pos -= 1;
-                    if (sorted_pos == -1) sorted_pos = char_possibilities_per_column[found_data->columns_set[j]].size() -1; 
-                    character = char_possibilities_per_column[found_data->columns_set[j]][sorted_pos];
+                    if (sorted_pos == -1) sorted_pos = char_possibilities_per_column[column].size() -1; 
+                    character = char_possibilities_per_column[column][sorted_pos];
                 }
-                
-                visited[character][found_data->columns_set[j]] = 1;
-                visited[t][found_data->columns_set[j]] += 1;
-                
-                found_data->set_closest_strings[j] = character;
-            }
 
-            found_data->sets_closest_strings_size = found_data->columns_sets_size;
-            found_data->columns_sets_ham_distances_size = n;
+
+                visited[character][column] = 1;
+                visited[t][column] += 1;
+                
+                found_data->closest_string[j] = character;
+            }
 
             for (int k = 0; k < n; k++)
             {
                 int d = 0;
-                for (int c = 0; c < found_data->columns_sets_size; c++)
+                for (int c = 0; c < found_data->size; c++)
                 {
-                    if(integer_dataset[k][found_data->columns_set[c]] != found_data->set_closest_strings[c]){
+                    if(integer_dataset[k][found_data->columns[c]] != found_data->closest_string[c]){
                         d += 1;
                     }
                 }
-                found_data->columns_set_ham_distances[k] = d;                
+
+                found_data->hamming_dist[k] = d;                
             } 
         }
     }
 }
 
-double setsSelectionSolver(int n_sets, double bsf) //CPLEX
+//CPLEX
+double solve(int n_sets, double bsf, float time_limit) 
 {
     IloEnv env;
-    IloModel Model(env, "Problema da Seleção de Colunas");
+    IloModel Model(env, "Problema da Seleção de Conjuntos");
     double cost;
+
 
     try
     {
@@ -237,23 +294,24 @@ double setsSelectionSolver(int n_sets, double bsf) //CPLEX
         // Variável objetivo
         IloNumVar z(env, 0, IloInfinity, ILOINT);
 
-        IloExprArray coluna;
-        coluna = IloExprArray(env, m);
+        IloExprArray column;
+        column = IloExprArray(env, m);
 
-        for (int i = 0; i < m; ++i)
-                coluna[i] = IloExpr(env);
+        for (int i = 0; i < m; ++i) column[i] = IloExpr(env);
 
         int indice = 0;
         for (const auto& pair : columns_sets.table_) {
-            const Data& data = pair.second;
-                for (int i = 0; i < data.columns_sets_size; i++) {
-                    coluna[data.columns_set[i]] += x[indice];
-                }
+            const Set& set = pair.second;
+
+            for (int i = 0; i < set.size; i++) {
+                column[set.columns[i]] += x[indice];
+            }
+
             mapping[indice] = pair.first;
             indice += 1;
         }
 
-        for (int i = 0; i < m; ++i) Model.add(coluna[i] == 1);
+        for (int i = 0; i < m; ++i) Model.add(column[i] == 1);
 
         for (int j = 0; j < n; j++)
         {
@@ -263,9 +321,9 @@ double setsSelectionSolver(int n_sets, double bsf) //CPLEX
             {
                 int key = mapping[s];
                 
-                Data* found_data = columns_sets.find(key);
+                Set* found_data = columns_sets.find(key);
 
-                exp2 += found_data->columns_set_ham_distances[j] * x[s];
+                exp2 += found_data->hamming_dist[j] * x[s];
             }
 
             Model.add(exp2 <= z);
@@ -280,12 +338,11 @@ double setsSelectionSolver(int n_sets, double bsf) //CPLEX
         // Solving
         IloCplex cplex(Model);
         cplex.setOut(env.getNullStream());
-        cplex.setParam(IloCplex::Param::TimeLimit, 0.5); // limite de tempo pra resolver
+        //cplex.setParam(IloCplex::Param::TimeLimit, 0.5); // limite de tempo pra resolver
+        cplex.setParam(IloCplex::Param::TimeLimit, time_limit); // limite de tempo pra resolver
         //cplex.setParam(IloCplex::EpGap,  0.05); //set the minimum required gap
         //cout << cplex.getModel() << endl;
 
-        IloNumVarArray startVar(env);
-        IloNumArray startVal(env);
 
         if (cplex.solve()){
             cost = cplex.getObjValue();
@@ -298,17 +355,11 @@ double setsSelectionSolver(int n_sets, double bsf) //CPLEX
             IloNumArray sol(env, n_sets);
             cplex.getValues(sol, x);
             
-            bests.clear();
             for (int i = 0; i < n_sets; i++)
             {
                 if (sol[i] > 0.5){
-                    bests.push_back(mapping[i]);
-                     columns_ILP_selection[i] = 1;
-
-                }
-                     
-
-                else{
+                    columns_ILP_selection[i] = 1;
+                } else{
                     columns_ILP_selection[i] = 0;
                 } 
                 
@@ -337,24 +388,26 @@ double setsSelectionSolver(int n_sets, double bsf) //CPLEX
 void adapt(int max_age)
 {
     int tam = columns_sets.size();
+
     for (int i = 0; i < tam; i++)
     {
         int key = mapping[i];
-        Data* found = columns_sets.find(key);
+        Set* found = columns_sets.find(key);
         if(found == nullptr) cout << "erro 512: ponteiro nulo" << endl;
-        if(found->columns_sets_size == 0) cout << "erro 554: elemento vazio" << endl;
+        if(found->size == 0) cout << "erro 554: elemento vazio" << endl;
 
         if (columns_ILP_selection[i] == 0)
         {
-            found->columns_sets_ages += 1;
-            if (found->columns_sets_ages >= max_age)
+            found->age += 1;
+            
+            if (found->age >= max_age)
             {
-                for (int j = 0; j < found->sets_closest_strings_size ; j++)
+                for (int j = 0; j < found->size ; j++)
                 {
-                    int character = found->set_closest_strings[j];
-                    int coluna = found->columns_set[j];
-                    visited[character][coluna] = 0;
-                    visited[t][coluna] -= 1;
+                    int character = found->closest_string[j];
+                    int column = found->columns[j];
+                    visited[character][column] = 0;
+                    visited[t][column] -= 1;
                 }
 
                 columns_sets.remove(key);                    
@@ -362,7 +415,14 @@ void adapt(int max_age)
         }
         else
         {
-            found->columns_sets_ages = 0;
+            found->age = 0;
+
+            for (int j = 0; j < found->size ; j++)
+            {
+                int character = found->closest_string[j];
+                int column = found->columns[j];
+
+            }
         }
     }
 
@@ -385,9 +445,7 @@ void columnsSetsGenerator(int loop, int max_size, int min_size)
     
     //================= loop da criação dos conjuntos ==========================
     for (l = 0; l < loop; l++)
-    {
-        
-        
+    {    
         // popula o shuffled_sets com os indices dos conjuntos em quantidade igual a columns_partition_size
         for (int i = index ; i < new_sets + index; i++)
         {            
@@ -397,36 +455,29 @@ void columnsSetsGenerator(int loop, int max_size, int min_size)
             }
         }
 
-        seed = chrono::system_clock::now().time_since_epoch().count();
+        seed = chrono::system_clock::now().time_since_epoch().count(); //a seed variável mantém o processo estocástico ao longo loops
         shuffle(shuffled_sets.begin(), shuffled_sets.end(), default_random_engine(seed));
 
-
         for (int i = index; i < new_sets + index; i++) {
+            Set new_data;
+            Set* found_data = columns_sets.find(i);
 
-            Data new_data;
-            Data* found_data = columns_sets.find(i);
-
-            if(found_data != nullptr){
-                cout << "erro 116:" << i << endl;
-            }
-            else{
-                columns_sets.insert(i, new_data);
-            }
-            
+            if(found_data == nullptr) columns_sets.insert(i, new_data);                     
         }
 
         j = 0;
         for (i = 0; i < m; i++)
         {
-            // column = rand() % n_new_sets;
+            /* A ultima linha (t) da matriz visited de cada coluna(conjunto) diz a quantidade de caracteres ja utilizada para a coluna. Nesse if, 
+            verifica-se se essa quantidade  é igual ao limite de possibilidades de caracteres. Se for, não será adicionado mais nenhuma. */
             if (!(visited[t][i] == char_possibilities_per_column[i].size())){
-                set = shuffled_sets[j];
-                Data* found_data = columns_sets.find(set);
-                found_data->columns_set[found_data->columns_sets_size] = i;
-                found_data->columns_sets_size +=1;
-            }
-            
-            j++;
+                set = shuffled_sets[i];
+                Set* found_data = columns_sets.find(set);
+                found_data->columns[found_data->size] = i;
+                found_data->size +=1;
+            }   
+             
+            j++;        
         }
 
         index = index + new_sets;
@@ -436,23 +487,26 @@ void columnsSetsGenerator(int loop, int max_size, int min_size)
 } 
 
 
-void mainLoop(int instance_opt, float time_limit)
+void CMSA(float time_limit, int max_age, int max_loops)
 {
     double opt, bsf = m;
-    int loops = 0;
 
     auto loop_start = chrono::high_resolution_clock::now();
     auto loop_end = loop_start;
-    auto loop_cur = chrono::duration_cast<chrono::milliseconds>(loop_end - loop_start);
+    auto loop_cur = chrono::duration_cast<chrono::milliseconds>(loop_end - loop_start);    
     
-    while (loops < 20 and loops_with_no_improval < 5)
-    {
-              
-        //================= CMSA Procedures ==========================
-        columnsSetsGenerator(1,1,1);   
-          
+    initializeDataStructures();
+
+    //================= CMSA Loop ==========================
+
+    while (loops_with_no_improval < 5)
+    {              
+        //CONSTRUCT + MERGE
+        columnsSetsGenerator(1,1,1);     
         solveSmallInstances();    
-        opt = setsSelectionSolver(columns_sets.size(), bsf); // seleciona os conjuntos
+
+        //SOLVE
+        opt = solve(columns_sets.size(), bsf, time_limit); // seleciona os conjuntos
 
         if (opt < bsf) // update da melhor solução
         {         
@@ -464,7 +518,13 @@ void mainLoop(int instance_opt, float time_limit)
             loops_with_no_improval += 1;
         }     
         
-        adapt(1); // envelhecimento
+        /* DEBUG */
+        //generateClosestString();
+        //optionsAndSelected();
+
+        //ADAPT
+        adapt(max_age); // envelhecimento
+
 
         loops += 1;
         loop_end = chrono::high_resolution_clock::now();
@@ -475,20 +535,14 @@ void mainLoop(int instance_opt, float time_limit)
     cout << "loops: " << loops << endl;
     cout <<"time: " << loop_cur.count() << endl;
     cout <<"opt: " << bsf << endl;
-    
+    //printf("%.f [%ld]\n", bsf, loop_cur.count());
+    /* cout << bsf; */
 }
-
 
 int main(int argc, char *argv[])
 {
-    int opt;
-    float time_limit;
-
-    for(int i = 0; i < 100;i++){
-        for(int j = 0; j < 10000; j++){
-            visited[i][j] = 0;
-        }
-    }
+    int max_age = 0, max_loops = 0;
+    float time_limit = 0;    
 
     readInstance();
     //printInstance();
@@ -496,20 +550,27 @@ int main(int argc, char *argv[])
     instanceTransformFunc();
 
     //lendo argumentos da linha de comando
-    /* for (int i = 0; i < argc; i++) {
-        if(!strcmp(argv[i], "-opt")) {          
-            sscanf(argv[i+1], "%d", &opt);
-            i++;
-        }
+    for (int i = 0; i < argc; i++) {
+        
         if(!strcmp(argv[i], "-t")) {          
             sscanf(argv[i+1], "%f", &time_limit);
             i++;
         }
+        if(!strcmp(argv[i], "-a")) {          
+            sscanf(argv[i+1], "%d", &max_age);
+            i++;
+        }
+        if(!strcmp(argv[i], "-l")) {          
+            sscanf(argv[i+1], "%d", &max_loops);
+            i++;
+        }
     }
-    cout << "opt received: " << opt << endl; */
-    
-    
-    mainLoop(opt, time_limit);
+
+    if(!time_limit){ cout << "Missing -t" << endl; return 0 ;}
+
+    //cout << time_limit << " " << max_age << " " << max_loops << endl;
+
+    CMSA(time_limit, max_age, max_loops);
 
     return 0;
 }

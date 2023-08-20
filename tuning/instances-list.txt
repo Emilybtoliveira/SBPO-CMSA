@@ -1,0 +1,25 @@
+## This is an example of specifying a list of instances.
+
+# Each line is an instance relative to trainInstancesDir/testInstancesdir
+# unless set to "" (see scenario.txt.tmpl) and an optional sequence of
+# instance-specific parameters that will be passed to target-runner when
+# invoked on that instance.
+
+# Empty lines and comments are ignored.
+
+marcone-train/4-40-500-1-6.csp 
+marcone-train/4-40-1000-5-9.csp 
+marcone-train/4-50-500-5-5.csp 
+marcone-train/4-50-5000-5-9.csp 
+marcone-train/4-50-10000-3-0.csp 
+marcone-train/20-10-1000-1-0.csp 
+marcone-train/20-10-2000-1-7.csp 
+marcone-train/20-10-10000-1-0.csp 
+marcone-train/20-30-500-4-7.csp 
+marcone-train/20-40-1000-1-0.csp 
+marcone-train/20-40-5000-5-9.csp 
+marcone-train/20-40-10000-5-9.csp 
+random-train/DNA_10_300_0.ln 
+random-train/DNA_30_1000_0.ln 
+random-train/protein_10_300_1.ln 
+random-train/protein_30_1000_0.ln 
